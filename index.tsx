@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { 
   Menu, X, ChevronRight, MapPin, Building2, TrendingUp, 
   User, Phone, CheckCircle2, BarChart3, Quote, Calendar, 
-  ArrowRight, Star, Home, Pen, Save, RotateCcw, ImageIcon, XCircle, Upload
+  ArrowRight, Star, Home, Pen, Save, RotateCcw, ImageIcon, XCircle, Upload, Download
 } from 'lucide-react';
 
 // --- Types ---
@@ -55,6 +55,7 @@ const EditModal = ({
   type: EditType;
 }) => {
   const [value, setValue] = useState(initialValue);
+  const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -64,9 +65,35 @@ const EditModal = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setIsProcessing(true);
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setValue(reader.result as string);
+      
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          // Resize logic: Max width 1200px to save storage
+          const MAX_WIDTH = 1200;
+          if (width > MAX_WIDTH) {
+            height = (height * MAX_WIDTH) / width;
+            width = MAX_WIDTH;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+             ctx.drawImage(img, 0, 0, width, height);
+             // Compress to JPEG 0.7 quality
+             const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+             setValue(dataUrl);
+             setIsProcessing(false);
+          }
+        };
+        img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
     }
@@ -118,11 +145,13 @@ const EditModal = ({
                     />
                     <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="px-4 py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 font-medium whitespace-nowrap text-sm"
+                        disabled={isProcessing}
+                        className="px-4 py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 font-medium whitespace-nowrap text-sm disabled:opacity-50"
                     >
-                        <Upload size={16} /> 내 PC
+                        <Upload size={16} /> {isProcessing ? '처리중...' : '내 PC'}
                     </button>
                 </div>
+                <p className="text-xs text-gray-500">* 내 PC 이미지는 자동으로 최적화(압축)되어 저장됩니다.</p>
 
                 <div className="relative aspect-video bg-gray-100 rounded-lg overflow-hidden border border-gray-200 group">
                   <img 
@@ -1029,7 +1058,7 @@ const ContactPage = () => {
 const AppContent = () => {
   const [currentPage, setCurrentPage] = useState<Page>('main');
   const [isScrolled, setIsScrolled] = useState(false);
-  const { isEditMode, toggleEditMode, resetContent, openEditor } = useEdit();
+  const { isEditMode, toggleEditMode, resetContent, openEditor, content } = useEdit();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -1042,6 +1071,18 @@ const AppContent = () => {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [currentPage]);
+
+  const exportSettings = () => {
+    const json = JSON.stringify(content, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = "site-content.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    alert("설정 파일이 다운로드되었습니다.");
+  };
 
   const renderPage = () => {
     switch (currentPage) {
@@ -1064,13 +1105,22 @@ const AppContent = () => {
       {/* Admin Floating Action Button */}
       <div className="fixed bottom-8 right-8 z-50 flex flex-col gap-3">
          {isEditMode && (
-           <button 
-             onClick={resetContent}
-             className="bg-red-500 text-white p-4 rounded-full shadow-xl hover:bg-red-600 transition-all hover:scale-110 flex items-center justify-center group"
-             title="초기화"
-           >
-             <RotateCcw size={24} className="group-hover:rotate-180 transition-transform duration-500" />
-           </button>
+           <>
+            <button 
+              onClick={exportSettings}
+              className="bg-white text-[#0F172A] p-4 rounded-full shadow-xl hover:bg-gray-100 transition-all hover:scale-110 flex items-center justify-center group border border-gray-200"
+              title="설정 데이터 내보내기 (JSON)"
+            >
+              <Download size={24} />
+            </button>
+            <button 
+              onClick={resetContent}
+              className="bg-red-500 text-white p-4 rounded-full shadow-xl hover:bg-red-600 transition-all hover:scale-110 flex items-center justify-center group"
+              title="초기화"
+            >
+              <RotateCcw size={24} className="group-hover:rotate-180 transition-transform duration-500" />
+            </button>
+           </>
          )}
          <button 
            onClick={toggleEditMode}
@@ -1099,16 +1149,34 @@ interface EditItem {
 
 const App = () => {
   const [isEditMode, setIsEditMode] = useState(false);
-  const [content, setContent] = useState<Record<string, string>>({});
   const [editingItem, setEditingItem] = useState<EditItem | null>(null);
+  
+  // LocalStorage Persistence
+  const [content, setContent] = useState<Record<string, string>>(() => {
+      try {
+        const saved = localStorage.getItem('site_content');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('site_content', JSON.stringify(content));
+    } catch (e) {
+      console.warn("Storage quota exceeded. Changes may not persist after refresh.");
+    }
+  }, [content]);
 
   const updateContent = (key: string, value: string) => {
     setContent(prev => ({ ...prev, [key]: value }));
   };
 
   const resetContent = () => {
-    if(window.confirm('모든 수정사항을 초기화하시겠습니까?')) {
+    if(window.confirm('모든 수정사항을 초기화하시겠습니까?\n저장된 내용이 영구적으로 삭제됩니다.')) {
       setContent({});
+      localStorage.removeItem('site_content');
     }
   };
 
